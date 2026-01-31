@@ -31,17 +31,17 @@ log_error() {
     echo "[claude-hook] ERROR: $*" >&2
 }
 
-# Find VS Code executable
-find_vscode() {
-    local code_paths=(
-        "code"
-        "/usr/local/bin/code"
-        "/opt/homebrew/bin/code"
-        "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
-        "$HOME/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
+# Find Cursor executable
+find_cursor() {
+    local cursor_paths=(
+        "cursor"
+        "/usr/local/bin/cursor"
+        "/opt/homebrew/bin/cursor"
+        "/Applications/Cursor.app/Contents/Resources/app/bin/cursor"
+        "$HOME/Applications/Cursor.app/Contents/Resources/app/bin/cursor"
     )
 
-    for path in "${code_paths[@]}"; do
+    for path in "${cursor_paths[@]}"; do
         if command -v "$path" &>/dev/null; then
             echo "$path"
             return 0
@@ -106,7 +106,7 @@ install_from_local() {
     # Silent if already up-to-date
 }
 
-# Install from VS Code Marketplace
+# Install from Cursor/VS Code Marketplace
 install_from_marketplace() {
     local code_cmd="$1"
 
@@ -152,13 +152,13 @@ main() {
         return 0
     fi
 
-    # Find VS Code
-    if ! code_cmd=$(find_vscode); then
-        log_error "VS Code not found in PATH"
+    # Find Cursor
+    if ! code_cmd=$(find_cursor); then
+        log_error "Cursor not found in PATH"
         return 1
     fi
 
-    log_info "Review file detected, launching VS Code..."
+    log_info "Review file detected, launching Cursor..."
 
     # Install/update extension based on source
     case "$INSTALL_SOURCE" in
