@@ -143,13 +143,22 @@ get_first_review_target() {
 
 main() {
     local project_dir="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+    local review_file="${project_dir}/${REVIEW_FILE}"
     local code_cmd
+
+    # Only proceed if a review file exists (indicates a review was done)
+    if [[ ! -f "$review_file" ]]; then
+        # No review performed, exit silently
+        return 0
+    fi
 
     # Find VS Code
     if ! code_cmd=$(find_vscode); then
         log_error "VS Code not found in PATH"
         return 1
     fi
+
+    log_info "Review file detected, launching VS Code..."
 
     # Install/update extension based on source
     case "$INSTALL_SOURCE" in
