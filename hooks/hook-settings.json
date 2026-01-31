@@ -1,0 +1,22 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/sync_and_launch.sh",
+            "timeout": 30000,
+            "environment": {
+              "CLAUDE_PROJECT_DIR": "{{projectDir}}",
+              "ARTIFACTORY_URL": "https://artifactory.example.com",
+              "ARTIFACTORY_REPO": "vscode-extensions-local",
+              "ARTIFACTORY_PATH": "claude-review-lens"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
