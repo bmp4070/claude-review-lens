@@ -1,0 +1,68 @@
+[
+  {
+    "file": "src/extension.ts",
+    "line": 1,
+    "message": "Consider adding a module-level JSDoc comment explaining the extension's purpose and architecture.",
+    "type": "info"
+  },
+  {
+    "file": "src/extension.ts",
+    "line": 45,
+    "message": "The SVG generation could be extracted into a separate utility module for better testability and reusability.",
+    "type": "info"
+  },
+  {
+    "file": "src/extension.ts",
+    "line": 118,
+    "message": "Consider using async/await with fs.promises instead of synchronous file operations to avoid blocking the extension host.",
+    "type": "warning"
+  },
+  {
+    "file": "src/extension.ts",
+    "line": 151,
+    "message": "The path matching logic should handle Windows path separators. Use path.normalize() for cross-platform compatibility.",
+    "type": "error"
+  },
+  {
+    "file": "src/sample.ts",
+    "line": 6,
+    "message": "Unsafe type assertion. Consider using a type guard or Zod schema validation instead of 'as' cast.",
+    "type": "error"
+  },
+  {
+    "file": "src/sample.ts",
+    "line": 9,
+    "message": "Using require() in ES modules is discouraged. Use import syntax instead.",
+    "type": "warning"
+  },
+  {
+    "file": "src/sample.ts",
+    "line": 10,
+    "message": "Synchronous file I/O blocks the event loop. Use fs.promises.writeFile() instead.",
+    "type": "warning"
+  },
+  {
+    "file": "src/sample.ts",
+    "line": 15,
+    "message": "This loop can be simplified using Array.reduce(): items.reduce((sum, n) => sum + n, 0)",
+    "type": "info"
+  },
+  {
+    "file": "src/sample.ts",
+    "line": 23,
+    "message": "Consider using a strongly typed User interface instead of 'unknown' for better type safety.",
+    "type": "info"
+  },
+  {
+    "file": "src/sample.ts",
+    "line": 33,
+    "message": "Missing error handling for fetch failure. Wrap in try/catch and handle network errors gracefully.",
+    "type": "error"
+  },
+  {
+    "file": "package.json",
+    "line": 8,
+    "message": "Minimum VS Code version 1.85.0 is appropriate for the APIs used. Good choice!",
+    "type": "info"
+  }
+]
