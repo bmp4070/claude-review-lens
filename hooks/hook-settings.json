@@ -10,9 +10,8 @@
             "timeout": 30000,
             "environment": {
               "CLAUDE_PROJECT_DIR": "{{projectDir}}",
-              "ARTIFACTORY_URL": "https://artifactory.example.com",
-              "ARTIFACTORY_REPO": "vscode-extensions-local",
-              "ARTIFACTORY_PATH": "claude-review-lens"
+              "INSTALL_SOURCE": "local",
+              "LOCAL_VSIX_PATH": "~/github-oss/claude-review-code/claude-review-lens-0.1.0.vsix"
             }
           }
         ]

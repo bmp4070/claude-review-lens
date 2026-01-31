@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Claude Code Stop Hook: Sync VS Code Extension & Launch IDE
-# Automatically updates Claude Review Lens and opens the project
+# Installs Claude Review Lens from local VSIX or VS Code Marketplace
 #
 
 set -euo pipefail
@@ -10,14 +10,14 @@ set -euo pipefail
 # Configuration
 # =============================================================================
 
-EXTENSION_ID="your-org.claude-review-lens"
-ARTIFACTORY_BASE_URL="${ARTIFACTORY_URL:-https://artifactory.example.com}"
-ARTIFACTORY_REPO="${ARTIFACTORY_REPO:-vscode-extensions-local}"
-ARTIFACTORY_PATH="${ARTIFACTORY_PATH:-claude-review-lens}"
+EXTENSION_ID="your-publisher-name.claude-review-lens"
 REVIEW_FILE=".claude-review.json"
 
-# Temp directory for downloads
-TEMP_DIR="${TMPDIR:-/tmp}/claude-review-lens-hook"
+# Installation source: "local" or "marketplace"
+INSTALL_SOURCE="${INSTALL_SOURCE:-local}"
+
+# Local VSIX path (used when INSTALL_SOURCE=local)
+LOCAL_VSIX_PATH="${LOCAL_VSIX_PATH:-$HOME/github-oss/claude-review-code/claude-review-lens-0.1.0.vsix}"
 
 # =============================================================================
 # Utility Functions
@@ -30,11 +30,6 @@ log_info() {
 log_error() {
     echo "[claude-hook] ERROR: $*" >&2
 }
-
-cleanup() {
-    [[ -d "$TEMP_DIR" ]] && rm -rf "$TEMP_DIR"
-}
-trap cleanup EXIT
 
 # Find VS Code executable
 find_vscode() {
@@ -56,7 +51,13 @@ find_vscode() {
     return 1
 }
 
-# Get installed extension version (returns empty if not installed)
+# Check if extension is installed
+is_extension_installed() {
+    local code_cmd="$1"
+    "$code_cmd" --list-extensions 2>/dev/null | grep -qi "^${EXTENSION_ID}$"
+}
+
+# Get installed extension version
 get_installed_version() {
     local code_cmd="$1"
     "$code_cmd" --list-extensions --show-versions 2>/dev/null \
@@ -65,29 +66,11 @@ get_installed_version() {
         || echo ""
 }
 
-# Query Artifactory for latest version
-get_latest_version() {
-    if [[ -z "${ARTIFACTORY_API_KEY:-}" ]]; then
-        log_error "ARTIFACTORY_API_KEY not set"
-        return 1
-    fi
-
-    local api_url="${ARTIFACTORY_BASE_URL}/api/storage/${ARTIFACTORY_REPO}/${ARTIFACTORY_PATH}?properties=version&list"
-    local response
-
-    response=$(curl -sf \
-        -H "X-JFrog-Art-Api: ${ARTIFACTORY_API_KEY}" \
-        "$api_url" 2>/dev/null) || return 1
-
-    # Extract version from properties response
-    # Expected format: {"properties":{"version":["0.2.0"]}}
-    echo "$response" | jq -r '.properties.version[0] // empty' 2>/dev/null
-}
-
-# Get latest VSIX download URL
-get_vsix_url() {
-    local version="$1"
-    echo "${ARTIFACTORY_BASE_URL}/${ARTIFACTORY_REPO}/${ARTIFACTORY_PATH}/claude-review-lens-${version}.vsix"
+# Get version from local VSIX filename
+get_local_vsix_version() {
+    local vsix_path="$1"
+    # Extract version from filename like claude-review-lens-0.1.0.vsix
+    basename "$vsix_path" | sed -E 's/.*-([0-9]+\.[0-9]+\.[0-9]+)\.vsix$/\1/'
 }
 
 # Compare versions: returns 0 if $1 > $2
@@ -95,35 +78,44 @@ version_gt() {
     [[ "$1" != "$2" ]] && [[ "$(printf '%s\n%s' "$1" "$2" | sort -V | tail -1)" == "$1" ]]
 }
 
-# Download and install extension
-install_extension() {
+# Install from local VSIX
+install_from_local() {
     local code_cmd="$1"
-    local version="$2"
-    local vsix_url
-    local vsix_path
+    local vsix_path="$2"
 
-    vsix_url=$(get_vsix_url "$version")
-    mkdir -p "$TEMP_DIR"
-    vsix_path="${TEMP_DIR}/claude-review-lens-${version}.vsix"
-
-    log_info "Downloading v${version} from Artifactory..."
-
-    if ! curl -sf \
-        -H "X-JFrog-Art-Api: ${ARTIFACTORY_API_KEY}" \
-        -o "$vsix_path" \
-        "$vsix_url"; then
-        log_error "Failed to download VSIX"
+    if [[ ! -f "$vsix_path" ]]; then
+        log_error "VSIX not found: $vsix_path"
         return 1
     fi
 
-    log_info "Installing extension..."
+    local local_version
+    local_version=$(get_local_vsix_version "$vsix_path")
+    local installed_version
+    installed_version=$(get_installed_version "$code_cmd")
 
-    if ! "$code_cmd" --install-extension "$vsix_path" --force &>/dev/null; then
-        log_error "Failed to install extension"
-        return 1
+    # Install if not present or outdated
+    if [[ -z "$installed_version" ]]; then
+        log_info "Installing Claude Review Lens v${local_version}..."
+        "$code_cmd" --install-extension "$vsix_path" --force &>/dev/null
+        log_info "Installed successfully"
+    elif version_gt "$local_version" "$installed_version"; then
+        log_info "Updating: v${installed_version} -> v${local_version}"
+        "$code_cmd" --install-extension "$vsix_path" --force &>/dev/null
+        log_info "Updated successfully"
     fi
+    # Silent if already up-to-date
+}
 
-    log_info "Successfully updated to v${version}"
+# Install from VS Code Marketplace
+install_from_marketplace() {
+    local code_cmd="$1"
+
+    if ! is_extension_installed "$code_cmd"; then
+        log_info "Installing Claude Review Lens from Marketplace..."
+        "$code_cmd" --install-extension "$EXTENSION_ID" &>/dev/null
+        log_info "Installed successfully"
+    fi
+    # Marketplace handles auto-updates, so we just ensure it's installed
 }
 
 # Extract first review target from .claude-review.json
@@ -152,8 +144,6 @@ get_first_review_target() {
 main() {
     local project_dir="${CLAUDE_PROJECT_DIR:-$(pwd)}"
     local code_cmd
-    local installed_version
-    local latest_version
 
     # Find VS Code
     if ! code_cmd=$(find_vscode); then
@@ -161,23 +151,18 @@ main() {
         return 1
     fi
 
-    # Check versions (silent unless update needed)
-    installed_version=$(get_installed_version "$code_cmd")
-
-    # Only query Artifactory if API key is set
-    if [[ -n "${ARTIFACTORY_API_KEY:-}" ]]; then
-        latest_version=$(get_latest_version 2>/dev/null || echo "")
-
-        if [[ -n "$latest_version" ]]; then
-            if [[ -z "$installed_version" ]]; then
-                log_info "Extension not installed, installing v${latest_version}..."
-                install_extension "$code_cmd" "$latest_version" || true
-            elif version_gt "$latest_version" "$installed_version"; then
-                log_info "Update available: v${installed_version} -> v${latest_version}"
-                install_extension "$code_cmd" "$latest_version" || true
-            fi
-        fi
-    fi
+    # Install/update extension based on source
+    case "$INSTALL_SOURCE" in
+        local)
+            install_from_local "$code_cmd" "$LOCAL_VSIX_PATH" || true
+            ;;
+        marketplace)
+            install_from_marketplace "$code_cmd" || true
+            ;;
+        *)
+            log_error "Unknown INSTALL_SOURCE: $INSTALL_SOURCE"
+            ;;
+    esac
 
     # Launch VS Code with project
     local goto_target
