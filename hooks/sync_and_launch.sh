@@ -17,7 +17,7 @@ REVIEW_FILE=".claude-review.json"
 INSTALL_SOURCE="${INSTALL_SOURCE:-local}"
 
 # Local VSIX path (used when INSTALL_SOURCE=local)
-LOCAL_VSIX_PATH="${LOCAL_VSIX_PATH:-$HOME/github-oss/claude-review-code/claude-review-lens-0.1.0.vsix}"
+LOCAL_VSIX_PATH="${LOCAL_VSIX_PATH:-$HOME/github-oss/claude-review-code/claude-review-lens-0.2.0.vsix}"
 
 # =============================================================================
 # Utility Functions

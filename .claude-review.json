@@ -1,68 +1,58 @@
 [
   {
     "file": "src/extension.ts",
-    "line": 1,
-    "message": "Consider adding a module-level JSDoc comment explaining the extension's purpose and architecture.",
-    "type": "info"
+    "line": 47,
+    "message": "### Icon Loading\n\nThe inline SVG approach is clever, but consider extracting this to a separate asset file for better maintainability.\n\n**Benefits:**\n- Easier to update the icon design\n- Better separation of concerns\n- Smaller bundle size if icon is reused",
+    "author": "Claude",
+    "mode": "suggestion",
+    "severity": "info"
   },
   {
     "file": "src/extension.ts",
-    "line": 45,
-    "message": "The SVG generation could be extracted into a separate utility module for better testability and reusability.",
-    "type": "info"
+    "line": 145,
+    "message": "### Synchronous File Read\n\n`fs.readFileSync` blocks the extension host. Consider using async alternatives:\n\n```typescript\nconst content = await fs.promises.readFile(this.reviewFilePath, 'utf-8');\n```\n\nThis is especially important if the review file grows large.",
+    "author": "Claude",
+    "mode": "suggestion",
+    "severity": "warning"
   },
   {
     "file": "src/extension.ts",
-    "line": 118,
-    "message": "Consider using async/await with fs.promises instead of synchronous file operations to avoid blocking the extension host.",
-    "type": "warning"
+    "line": 206,
+    "message": "### Path Handling\n\n**Issue:** Windows paths use backslashes which may cause issues.\n\n**Recommendation:** Normalize paths before comparison:\n\n```typescript\nconst normalizedPath = path.normalize(firstComment.file).replace(/\\\\/g, '/');\n```",
+    "author": "Claude",
+    "mode": "comment",
+    "severity": "error"
   },
   {
     "file": "src/extension.ts",
-    "line": 151,
-    "message": "The path matching logic should handle Windows path separators. Use path.normalize() for cross-platform compatibility.",
-    "type": "error"
+    "line": 326,
+    "message": "The `resolveThread` method correctly disposes the thread, but doesn't persist the resolved state. Consider:\n\n1. Writing resolved comment IDs to a `.claude-review-resolved.json` file\n2. Filtering these out on next load\n\nThis would persist resolved state across sessions.",
+    "author": "Claude",
+    "mode": "suggestion",
+    "severity": "info"
   },
   {
     "file": "src/sample.ts",
     "line": 6,
-    "message": "Unsafe type assertion. Consider using a type guard or Zod schema validation instead of 'as' cast.",
-    "type": "error"
-  },
-  {
-    "file": "src/sample.ts",
-    "line": 9,
-    "message": "Using require() in ES modules is discouraged. Use import syntax instead.",
-    "type": "warning"
-  },
-  {
-    "file": "src/sample.ts",
-    "line": 10,
-    "message": "Synchronous file I/O blocks the event loop. Use fs.promises.writeFile() instead.",
-    "type": "warning"
+    "message": "### Unsafe Type Assertion\n\n**Problem:** Using `as` bypasses TypeScript's type checking.\n\n**Suggested Fix:**\n```typescript\nfunction isUserData(data: unknown): data is { name: string; email: string } {\n  return (\n    typeof data === 'object' &&\n    data !== null &&\n    'name' in data &&\n    'email' in data\n  );\n}\n\nif (!isUserData(data)) {\n  throw new Error('Invalid user data');\n}\n```\n\nThis provides runtime validation with proper TypeScript narrowing.",
+    "author": "Claude",
+    "mode": "suggestion",
+    "severity": "error"
   },
   {
     "file": "src/sample.ts",
     "line": 15,
-    "message": "This loop can be simplified using Array.reduce(): items.reduce((sum, n) => sum + n, 0)",
-    "type": "info"
+    "message": "### Array Method Preference\n\nThis imperative loop can be simplified:\n\n```typescript\n// Before\nlet total = 0;\nfor (let i = 0; i < items.length; i++) {\n  total += items[i];\n}\n\n// After\nconst total = items.reduce((sum, n) => sum + n, 0);\n```\n\n✅ More concise  \n✅ Immutable  \n✅ Functional style",
+    "author": "Claude",
+    "mode": "suggestion",
+    "severity": "info"
   },
   {
     "file": "src/sample.ts",
-    "line": 23,
-    "message": "Consider using a strongly typed User interface instead of 'unknown' for better type safety.",
-    "type": "info"
-  },
-  {
-    "file": "src/sample.ts",
-    "line": 33,
-    "message": "Missing error handling for fetch failure. Wrap in try/catch and handle network errors gracefully.",
-    "type": "error"
-  },
-  {
-    "file": "package.json",
-    "line": 8,
-    "message": "Minimum VS Code version 1.85.0 is appropriate for the APIs used. Good choice!",
-    "type": "info"
+    "line": 34,
+    "message": "### Missing Error Handling\n\nNetwork requests should always handle failures:\n\n```typescript\nasync fetchUser(id: string): Promise<User | null> {\n  try {\n    const response = await fetch(`/api/users/${id}`);\n    if (!response.ok) {\n      throw new Error(`HTTP ${response.status}`);\n    }\n    return response.json();\n  } catch (error) {\n    console.error('Failed to fetch user:', error);\n    return null;\n  }\n}\n```\n\n⚠️ **Without this:** Unhandled promise rejections can crash the application.",
+    "author": "Claude",
+    "mode": "comment",
+    "severity": "error"
   }
 ]

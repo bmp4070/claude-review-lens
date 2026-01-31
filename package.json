@@ -1,14 +1,22 @@
 {
   "name": "claude-review-lens",
   "displayName": "Claude Review Lens",
-  "description": "Visualize AI review comments directly in the editor with ghost text and gutter icons",
-  "version": "0.1.0",
+  "description": "Visualize AI code review comments as native VS Code comment threads - like CodeRabbit for local development",
+  "version": "0.2.0",
   "publisher": "your-publisher-name",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Other"
+    "Other",
+    "Linters"
+  ],
+  "keywords": [
+    "claude",
+    "ai",
+    "code review",
+    "comments",
+    "pr review"
   ],
   "activationEvents": [
     "workspaceContains:.claude-review.json"
@@ -17,25 +25,76 @@
   "contributes": {
     "commands": [
       {
-        "command": "claude-review-lens.refresh",
-        "title": "Claude Review Lens: Refresh Comments"
+        "command": "claude-review.refresh",
+        "title": "Refresh Review Comments",
+        "category": "Claude Review",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "claude-review.resolve",
+        "title": "Resolve",
+        "category": "Claude Review",
+        "icon": "$(check)"
+      },
+      {
+        "command": "claude-review.resolveAll",
+        "title": "Resolve All Comments",
+        "category": "Claude Review",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "claude-review.openPanel",
+        "title": "Open Comments Panel",
+        "category": "Claude Review",
+        "icon": "$(comment-discussion)"
       }
-    ]
+    ],
+    "menus": {
+      "comments/commentThread/title": [
+        {
+          "command": "claude-review.resolve",
+          "when": "commentController == claude-review && commentThread =~ /claude-review-thread/",
+          "group": "inline@1"
+        }
+      ],
+      "comments/commentThread/context": [
+        {
+          "command": "claude-review.resolve",
+          "when": "commentController == claude-review",
+          "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "claude-review.refresh",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "command": "claude-review.resolveAll",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "command": "claude-review.openPanel",
+          "when": "workspaceFolderCount > 0"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src --ext ts",
+    "package": "vsce package --allow-missing-repository"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^6.13.0",
     "@typescript-eslint/parser": "^6.13.0",
-    "@vscode/vsce": "^3.7.1",
+    "@vscode/vsce": "^3.2.1",
     "eslint": "^8.54.0",
     "typescript": "^5.3.0",
-    "vsce": "^2.11.0"
+    "vsce": "^2.15.0"
   }
 }
