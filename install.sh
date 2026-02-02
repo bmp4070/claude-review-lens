@@ -62,28 +62,6 @@ detect_editor() {
 # Installation Steps
 # =============================================================================
 
-build_extension() {
-    local project_dir="$1"
-    step "Building extension from source..."
-
-    if ! command -v npm &>/dev/null; then
-        warn "npm not found, cannot build extension"
-        return 1
-    fi
-
-    (
-        cd "$project_dir"
-        npm install --silent 2>/dev/null
-        npm run compile --silent 2>/dev/null
-        npm run package --silent 2>/dev/null
-    ) || {
-        warn "Build failed"
-        return 1
-    }
-
-    info "Extension built successfully"
-}
-
 install_extension() {
     local editor="$1"
     step "Installing VS Code extension..."
@@ -91,34 +69,39 @@ install_extension() {
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-    # Look for existing VSIX
+    # Look for local VSIX first (if cloned repo)
     local vsix_path=""
     vsix_path=$(find "$script_dir" -maxdepth 1 -name "claude-review-lens-*.vsix" -type f 2>/dev/null | head -1)
 
-    # If no VSIX found, try to build it
-    if [[ -z "$vsix_path" ]] && [[ -f "$script_dir/package.json" ]]; then
-        if build_extension "$script_dir"; then
-            vsix_path=$(find "$script_dir" -maxdepth 1 -name "claude-review-lens-*.vsix" -type f 2>/dev/null | head -1)
-        fi
-    fi
-
-    # If still no VSIX, try downloading from releases
+    # If no local VSIX, download from GitHub releases
     if [[ -z "$vsix_path" ]]; then
         step "Downloading extension from GitHub releases..."
         vsix_path="/tmp/claude-review-lens.vsix"
-        if curl -fsSL "$VSIX_URL" -o "$vsix_path" 2>/dev/null; then
-            info "Downloaded extension"
-        else
-            warn "Could not download VSIX. Install manually from $REPO_URL/releases"
-            return 0
+        if ! curl -fsSL "$VSIX_URL" -o "$vsix_path" 2>/dev/null; then
+            echo ""
+            echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${RED}║  Extension download failed!                                 ║${NC}"
+            echo -e "${RED}╠════════════════════════════════════════════════════════════╣${NC}"
+            echo -e "${RED}║  Please install manually:                                   ║${NC}"
+            echo -e "${RED}║  1. Download VSIX from:                                     ║${NC}"
+            echo -e "${RED}║     ${REPO_URL}/releases ${NC}"
+            echo -e "${RED}║  2. Run:                                                    ║${NC}"
+            echo -e "${RED}║     $editor --install-extension <path-to-vsix>     ${NC}"
+            echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
+            echo ""
+            return 1
         fi
+        info "Downloaded extension"
     fi
 
     # Install the extension
     if "$editor" --install-extension "$vsix_path" --force &>/dev/null; then
         info "Extension installed in $editor"
     else
-        warn "Extension install failed. Try manually: $editor --install-extension $vsix_path"
+        echo ""
+        echo -e "${RED}Extension install failed.${NC}"
+        echo "Try manually: $editor --install-extension $vsix_path"
+        return 1
     fi
 }
 
