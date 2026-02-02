@@ -117,7 +117,78 @@ class ClaudeReviewController {
       }
     );
 
-    this.disposables.push(resolveCmd, resolveAllCmd, refreshCmd, openPanelCmd);
+    // Expand all collapsed threads
+    const expandAllCmd = vscode.commands.registerCommand(
+      'claude-review.expandAll',
+      () => {
+        this.expandAllThreads();
+      }
+    );
+
+    // Toggle thread at current line
+    const toggleCmd = vscode.commands.registerCommand(
+      'claude-review.toggleAtLine',
+      () => {
+        this.toggleThreadAtCurrentLine();
+      }
+    );
+
+    this.disposables.push(resolveCmd, resolveAllCmd, refreshCmd, openPanelCmd, expandAllCmd, toggleCmd);
+
+    // Auto-expand when cursor moves to a line with a comment
+    vscode.window.onDidChangeTextEditorSelection(
+      (e) => this.onSelectionChange(e),
+      this,
+      this.disposables
+    );
+  }
+
+  private onSelectionChange(e: vscode.TextEditorSelectionChangeEvent): void {
+    const editor = e.textEditor;
+    const line = e.selections[0]?.active.line;
+    if (line === undefined) {
+      return;
+    }
+
+    // Find thread at this line
+    const filePath = editor.document.uri.fsPath;
+    for (const thread of this.threads.values()) {
+      if (
+        thread.uri.fsPath === filePath &&
+        thread.range &&
+        thread.range.start.line === line &&
+        thread.collapsibleState === vscode.CommentThreadCollapsibleState.Collapsed
+      ) {
+        thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+        break;
+      }
+    }
+  }
+
+  private expandAllThreads(): void {
+    for (const thread of this.threads.values()) {
+      thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+    }
+  }
+
+  private toggleThreadAtCurrentLine(): void {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      return;
+    }
+
+    const line = editor.selection.active.line;
+    const filePath = editor.document.uri.fsPath;
+
+    for (const thread of this.threads.values()) {
+      if (thread.uri.fsPath === filePath && thread.range && thread.range.start.line === line) {
+        thread.collapsibleState =
+          thread.collapsibleState === vscode.CommentThreadCollapsibleState.Collapsed
+            ? vscode.CommentThreadCollapsibleState.Expanded
+            : vscode.CommentThreadCollapsibleState.Collapsed;
+        break;
+      }
+    }
   }
 
   private setupFileWatcher(): void {

@@ -4,8 +4,6 @@
 
 Transform Claude's code review output into native VS Code/Cursor comment threads — anchored to specific lines, with markdown rendering, severity badges, and a resolve workflow.
 
-![Demo](docs/demo.gif)
-
 ## Features
 
 - **Native Comment Threads** — Reviews appear as collapsible threads in the editor

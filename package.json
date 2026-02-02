@@ -2,7 +2,7 @@
   "name": "claude-review-lens",
   "displayName": "Claude Review Lens",
   "description": "Visualize AI code review comments as native VS Code comment threads - like CodeRabbit for local development",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "your-publisher-name",
   "engines": {
     "vscode": "^1.85.0"
@@ -47,6 +47,26 @@
         "title": "Open Comments Panel",
         "category": "Claude Review",
         "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "claude-review.expandAll",
+        "title": "Expand All Comments",
+        "category": "Claude Review",
+        "icon": "$(expand-all)"
+      },
+      {
+        "command": "claude-review.toggleAtLine",
+        "title": "Toggle Comment at Line",
+        "category": "Claude Review",
+        "icon": "$(comment)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "claude-review.toggleAtLine",
+        "key": "ctrl+shift+/",
+        "mac": "cmd+shift+/",
+        "when": "editorTextFocus"
       }
     ],
     "menus": {
@@ -76,6 +96,14 @@
         {
           "command": "claude-review.openPanel",
           "when": "workspaceFolderCount > 0"
+        },
+        {
+          "command": "claude-review.expandAll",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "command": "claude-review.toggleAtLine",
+          "when": "editorTextFocus"
         }
       ]
     }
