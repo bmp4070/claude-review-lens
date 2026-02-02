@@ -45,7 +45,7 @@ claude
 
 # Run a review
 > /review                    # Review all changes
-> /review src/api/           # Review specific path
+> /review PR 629           # Review specific PR
 > review the authentication module
 
 # Exit Claude
