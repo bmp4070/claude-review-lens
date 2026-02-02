@@ -1,5 +1,8 @@
 # Claude Review Lens
 
+<img width="1112" height="926" alt="Screenshot 2026-02-02 at 12 57 40 PM" src="https://github.com/user-attachments/assets/49e1bc09-fca4-444e-ad81-cc261ccb63cf" />
+
+
 **CodeRabbit-style AI code reviews in your IDE, powered by Claude CLI.**
 
 Transform Claude's code review output into native VS Code/Cursor comment threads — anchored to specific lines, with markdown rendering, severity badges, and a resolve workflow.
