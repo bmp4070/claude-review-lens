@@ -18,13 +18,13 @@ Transform Claude's code review output into native VS Code/Cursor comment threads
 ## Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/claude-review-lens/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/bmp4070/claude-review-lens/main/install.sh | bash
 ```
 
 Or clone and run:
 
 ```bash
-git clone https://github.com/YOUR_ORG/claude-review-lens.git
+git clone https://github.com/bmp4070/claude-review-lens.git
 cd claude-review-lens
 ./install.sh
 ```
@@ -142,7 +142,7 @@ cursor --uninstall-extension your-publisher-name.claude-review-lens
 
 ```bash
 # Clone
-git clone https://github.com/YOUR_ORG/claude-review-lens.git
+git clone https://github.com/bmp4070/claude-review-lens.git
 cd claude-review-lens
 
 # Install dependencies

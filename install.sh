@@ -16,8 +16,8 @@ set -euo pipefail
 # Configuration
 # =============================================================================
 
-REPO_URL="https://github.com/YOUR_ORG/claude-review-lens"
-VSIX_URL="https://github.com/YOUR_ORG/claude-review-lens/releases/latest/download/claude-review-lens.vsix"
+REPO_URL="https://github.com/bmp4070/claude-review-lens"
+VSIX_URL="https://github.com/bmp4070/claude-review-lens/releases/latest/download/claude-review-lens.vsix"
 CLAUDE_DIR="$HOME/.claude"
 HOOKS_DIR="$CLAUDE_DIR/hooks"
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
