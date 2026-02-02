@@ -13,7 +13,13 @@ interface ReviewComment {
   author?: string;
   mode?: 'comment' | 'suggestion';
   severity?: 'info' | 'warning' | 'error';
+  metadata?: {
+    branch?: string;
+  };
 }
+
+// ReviewFile format: { branch?: string, pr?: number, comments: ReviewComment[] }
+// Also supports simple array format: ReviewComment[]
 
 interface ClaudeComment extends vscode.Comment {
   id: string;
@@ -214,10 +220,16 @@ class ClaudeReviewController {
       }
 
       const content = fs.readFileSync(this.reviewFilePath, 'utf-8');
-      const comments: ReviewComment[] = JSON.parse(content);
+      const parsed = JSON.parse(content);
 
-      if (!Array.isArray(comments)) {
-        vscode.window.showWarningMessage('Claude Review: Invalid format - expected array');
+      // Support both array format and object format with comments field
+      let comments: ReviewComment[];
+      if (Array.isArray(parsed)) {
+        comments = parsed;
+      } else if (parsed && typeof parsed === 'object' && Array.isArray(parsed.comments)) {
+        comments = parsed.comments;
+      } else {
+        vscode.window.showWarningMessage('Claude Review: Invalid format - expected array or {comments: [...]}');
         return;
       }
 

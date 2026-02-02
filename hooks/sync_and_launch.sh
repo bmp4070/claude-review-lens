@@ -17,7 +17,7 @@ REVIEW_FILE=".claude-review.json"
 INSTALL_SOURCE="${INSTALL_SOURCE:-local}"
 
 # Local VSIX path (used when INSTALL_SOURCE=local)
-LOCAL_VSIX_PATH="${LOCAL_VSIX_PATH:-$HOME/github-oss/claude-review-code/claude-review-lens-0.2.0.vsix}"
+LOCAL_VSIX_PATH="${LOCAL_VSIX_PATH:-$HOME/github-oss/claude-review-code/claude-review-lens-0.2.1.vsix}"
 
 # =============================================================================
 # Utility Functions
@@ -137,6 +137,65 @@ get_first_review_target() {
     fi
 }
 
+# Get branch from review metadata
+get_review_branch() {
+    local project_dir="$1"
+    local review_file="${project_dir}/${REVIEW_FILE}"
+
+    if [[ ! -f "$review_file" ]]; then
+        return 1
+    fi
+
+    # Check for metadata.branch or top-level branch field
+    local branch
+    branch=$(jq -r '.metadata.branch // .branch // empty' "$review_file" 2>/dev/null)
+
+    # If it's an array, check first element for metadata
+    if [[ -z "$branch" ]]; then
+        branch=$(jq -r 'if type == "array" then .[0].metadata.branch // empty else empty end' "$review_file" 2>/dev/null)
+    fi
+
+    echo "$branch"
+}
+
+# Checkout branch if specified
+checkout_branch() {
+    local project_dir="$1"
+    local branch="$2"
+
+    if [[ -z "$branch" ]]; then
+        return 0
+    fi
+
+    # Check if we're in a git repo
+    if ! git -C "$project_dir" rev-parse --git-dir &>/dev/null; then
+        log_info "Not a git repo, skipping branch checkout"
+        return 0
+    fi
+
+    local current_branch
+    current_branch=$(git -C "$project_dir" branch --show-current 2>/dev/null || echo "")
+
+    if [[ "$current_branch" == "$branch" ]]; then
+        return 0
+    fi
+
+    log_info "Checking out branch: $branch"
+
+    # Fetch first to ensure we have the branch
+    git -C "$project_dir" fetch origin "$branch" 2>/dev/null || true
+
+    # Try to checkout
+    if git -C "$project_dir" checkout "$branch" 2>/dev/null; then
+        log_info "Switched to branch: $branch"
+    elif git -C "$project_dir" checkout -b "$branch" "origin/$branch" 2>/dev/null; then
+        log_info "Created and switched to branch: $branch"
+    else
+        log_error "Failed to checkout branch: $branch"
+        return 1
+    fi
+}
+
 # =============================================================================
 # Main Logic
 # =============================================================================
@@ -159,6 +218,13 @@ main() {
     fi
 
     log_info "Review file detected, launching Cursor..."
+
+    # Checkout the PR branch if specified in review file
+    local branch
+    branch=$(get_review_branch "$project_dir" || echo "")
+    if [[ -n "$branch" ]]; then
+        checkout_branch "$project_dir" "$branch" || true
+    fi
 
     # Install/update extension based on source
     case "$INSTALL_SOURCE" in
