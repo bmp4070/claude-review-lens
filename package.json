@@ -3,7 +3,8 @@
   "displayName": "Claude Review Lens",
   "description": "Visualize AI code review comments as native VS Code comment threads - like CodeRabbit for local development",
   "version": "0.2.1",
-  "publisher": "your-publisher-name",
+  "publisher": "code-authx",
+  "icon": "assets/icon.png",
   "engines": {
     "vscode": "^1.85.0"
   },
