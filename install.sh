@@ -5,10 +5,6 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/bmp4070/claude-review-lens/main/install.sh | bash
 #
-# Or clone and run:
-#   git clone https://github.com/bmp4070/claude-review-lens.git
-#   cd claude-review-lens && ./install.sh
-#
 
 set -euo pipefail
 
@@ -16,8 +12,8 @@ set -euo pipefail
 # Configuration
 # =============================================================================
 
-REPO_URL="https://github.com/bmp4070/claude-review-lens"
-VSIX_URL="https://github.com/bmp4070/claude-review-lens/releases/latest/download/claude-review-lens.vsix"
+EXTENSION_ID="code-authx.claude-review-lens"
+MARKETPLACE_URL="https://marketplace.visualstudio.com/items?itemName=${EXTENSION_ID}"
 CLAUDE_DIR="$HOME/.claude"
 HOOKS_DIR="$CLAUDE_DIR/hooks"
 SKILLS_DIR="$CLAUDE_DIR/skills"
@@ -45,7 +41,6 @@ step() { echo -e "${BLUE}→${NC} $*"; }
 
 check_deps() {
     command -v jq &>/dev/null || error "jq required. Install: brew install jq"
-    command -v curl &>/dev/null || error "curl required"
 }
 
 detect_editor() {
@@ -64,49 +59,21 @@ detect_editor() {
 
 install_extension() {
     local editor="$1"
-    step "Installing VS Code extension..."
+    step "Installing extension from VS Code Marketplace..."
 
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-    # Look for local VSIX first (if cloned repo)
-    local vsix_path=""
-    vsix_path=$(find "$script_dir" -maxdepth 1 -name "claude-review-lens-*.vsix" -type f 2>/dev/null | head -1)
-
-    # If no local VSIX, download from GitHub releases
-    if [[ -z "$vsix_path" ]]; then
-        step "Downloading extension from GitHub releases..."
-        vsix_path="/tmp/claude-review-lens.vsix"
-        if ! curl -fsSL "$VSIX_URL" -o "$vsix_path" 2>/dev/null; then
-            echo ""
-            echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
-            echo -e "${RED}║  Extension download failed!                                 ║${NC}"
-            echo -e "${RED}╠════════════════════════════════════════════════════════════╣${NC}"
-            echo -e "${RED}║  Please install manually:                                   ║${NC}"
-            echo -e "${RED}║  1. Download VSIX from:                                     ║${NC}"
-            echo -e "${RED}║     ${REPO_URL}/releases ${NC}"
-            echo -e "${RED}║  2. Run:                                                    ║${NC}"
-            echo -e "${RED}║     $editor --install-extension <path-to-vsix>     ${NC}"
-            echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
-            echo ""
-            return 1
-        fi
-        info "Downloaded extension"
-    fi
-
-    # Install the extension
-    if "$editor" --install-extension "$vsix_path" --force &>/dev/null; then
-        info "Extension installed in $editor"
+    if "$editor" --install-extension "$EXTENSION_ID" --force &>/dev/null; then
+        info "Extension installed: $EXTENSION_ID"
     else
         echo ""
-        echo -e "${RED}Extension install failed.${NC}"
-        echo "Try manually: $editor --install-extension $vsix_path"
-        return 1
+        warn "Auto-install failed. Install manually:"
+        echo "    $editor --install-extension $EXTENSION_ID"
+        echo "    Or visit: $MARKETPLACE_URL"
+        echo ""
     fi
 }
 
 install_hook() {
-    step "Installing Claude hook..."
+    step "Installing Claude stop hook..."
 
     mkdir -p "$HOOKS_DIR"
 
@@ -131,7 +98,6 @@ get_first_target() {
     local file="${1}/${REVIEW_FILE}"
     [[ -f "$file" ]] || return 1
     local f l
-    # Support both array and object formats
     f=$(jq -r 'if type == "array" then .[0].file else .comments[0].file end // empty' "$file" 2>/dev/null)
     l=$(jq -r 'if type == "array" then .[0].line else .comments[0].line end // 1' "$file" 2>/dev/null)
     [[ -n "$f" ]] && echo "${1}/${f}:${l}"
@@ -167,11 +133,9 @@ main() {
 
     log_info "Review detected, launching $editor..."
 
-    # Checkout PR branch if specified
     local branch=$(get_branch "$project_dir" || echo "")
     [[ -n "$branch" ]] && checkout_branch "$project_dir" "$branch"
 
-    # Launch editor
     local goto=$(get_first_target "$project_dir" || echo "")
     if [[ -n "$goto" ]]; then
         "$editor" "$project_dir" --goto "$goto" &>/dev/null &
@@ -185,51 +149,32 @@ main "$@"
 HOOK_EOF
 
     chmod +x "$HOOKS_DIR/sync_and_launch.sh"
-    info "Hook installed: $HOOKS_DIR/sync_and_launch.sh"
+    info "Hook installed: ~/.claude/hooks/sync_and_launch.sh"
 }
 
 install_settings() {
-    step "Configuring Claude settings..."
-
-    local hook_config
-    hook_config=$(cat << 'EOF'
-{
-  "hooks": {
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/.claude/hooks/sync_and_launch.sh",
-            "timeout": 30000
-          }
-        ]
-      }
-    ]
-  }
-}
-EOF
-)
+    step "Configuring Claude hooks..."
 
     mkdir -p "$CLAUDE_DIR"
 
+    local hook_entry='{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "~/.claude/hooks/sync_and_launch.sh",
+        "timeout": 30000
+      }]
+    }'
+
     if [[ ! -f "$SETTINGS_FILE" ]]; then
-        echo "$hook_config" | jq '.' > "$SETTINGS_FILE"
-        info "Created settings with hook"
+        echo "{\"hooks\":{\"Stop\":[$hook_entry]}}" | jq '.' > "$SETTINGS_FILE"
+        info "Created Claude settings with hook"
     elif jq -e '.hooks.Stop[]?.hooks[]? | select(.command | contains("sync_and_launch"))' "$SETTINGS_FILE" &>/dev/null; then
         info "Hook already configured"
-    elif jq -e '.hooks.Stop' "$SETTINGS_FILE" &>/dev/null; then
-        local new_hook
-        new_hook=$(echo "$hook_config" | jq '.hooks.Stop[0]')
-        jq --argjson hook "$new_hook" '.hooks.Stop += [$hook]' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
-        mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
-        info "Added hook to existing config"
     else
-        jq --argjson hooks "$(echo "$hook_config" | jq '.hooks')" \
-            '.hooks = (.hooks // {}) + $hooks' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
+        jq --argjson hook "$hook_entry" '.hooks.Stop = ((.hooks.Stop // []) + [$hook])' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
         mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
-        info "Added hooks section"
+        info "Added hook to Claude settings"
     fi
 }
 
@@ -245,16 +190,14 @@ name: pr-review
 description: Review a GitHub PR and output findings to .claude-review.json for IDE visualization
 ---
 
-# PR Review Skill
-
 Review a GitHub Pull Request and generate structured review comments.
 
-## Instructions
+## Steps
 
-1. **Get PR details**: `gh pr view <number> --json headRefName,title,body,files`
-2. **Checkout PR branch**: `gh pr checkout <number>`
-3. **Analyze changes**: `gh pr diff <number>`
-4. **Write findings** to `.claude-review.json`:
+1. Get PR info: `gh pr view <number> --json headRefName,title,files`
+2. Checkout branch: `gh pr checkout <number>`
+3. Analyze changes: `gh pr diff <number>`
+4. Write `.claude-review.json`:
 
 ```json
 {
@@ -274,53 +217,22 @@ Review a GitHub Pull Request and generate structured review comments.
 ```
 
 ## Severity
+
 - **error**: Security, bugs, crashes, breaking changes
 - **warning**: Performance, code smells, deprecations
 - **info**: Style, best practices
 
 ## Usage
+
 ```
 /pr-review 123
 /pr-review https://github.com/org/repo/pull/123
 ```
 
-After writing the file, summarize findings. The IDE will display comments when you exit.
+After writing the file, summarize findings by severity. IDE opens with comments on exit.
 SKILL_EOF
 
-    info "Skill installed: $skill_dir/SKILL.md"
-}
-
-install_claude_md() {
-    step "Installing CLAUDE.md instructions..."
-
-    local claude_md="$CLAUDE_DIR/CLAUDE.md"
-    local marker="# Claude Review Lens"
-
-    if [[ -f "$claude_md" ]] && grep -q "$marker" "$claude_md"; then
-        info "CLAUDE.md already configured"
-        return 0
-    fi
-
-    cat >> "$claude_md" << 'CLAUDE_EOF'
-
-# Claude Review Lens
-
-When reviewing PRs, output to `.claude-review.json`:
-
-```json
-{
-  "branch": "feature-branch",
-  "pr": 123,
-  "comments": [
-    {"file": "path.ts", "line": 42, "message": "...", "severity": "error"}
-  ]
-}
-```
-
-Use `/pr-review <number>` to review a PR.
-CLAUDE_EOF
-
-    info "Added instructions to CLAUDE.md"
+    info "Skill installed: ~/.claude/skills/pr-review/"
 }
 
 # =============================================================================
@@ -329,17 +241,19 @@ CLAUDE_EOF
 
 main() {
     echo ""
-    echo -e "${CYAN}╔════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║   Claude Review Lens Installer         ║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
+    echo -e "${CYAN}╔════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║      Claude Review Lens Installer          ║${NC}"
+    echo -e "${CYAN}╚════════════════════════════════════════════╝${NC}"
     echo ""
 
     check_deps
 
     local editor
     editor=$(detect_editor)
+
     if [[ -z "$editor" ]]; then
-        warn "No editor found (cursor/code). Extension not installed."
+        warn "No editor found (cursor/code)"
+        echo "    Install extension manually: $MARKETPLACE_URL"
     else
         install_extension "$editor"
     fi
@@ -347,20 +261,19 @@ main() {
     install_hook
     install_settings
     install_skill
-    install_claude_md
 
     echo ""
-    echo -e "${GREEN}Installation complete!${NC}"
+    echo -e "${GREEN}✓ Installation complete!${NC}"
     echo ""
     echo "  Usage:"
     echo "    cd your-project"
     echo "    claude"
-    echo "    > /pr-review 123      # Review PR #123"
+    echo "    > /pr-review 123"
     echo "    > exit"
     echo ""
-    echo "  On exit, your editor opens with review comments."
+    echo "  IDE opens automatically with review comments."
     echo ""
-    echo -e "  ${YELLOW}⚠ IMPORTANT: Restart Claude CLI for /pr-review to appear${NC}"
+    echo -e "  ${YELLOW}⚠ Restart Claude CLI for /pr-review skill${NC}"
     echo ""
 }
 
