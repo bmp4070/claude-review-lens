@@ -1,6 +1,6 @@
 # Claude Review Lens
 
-<img width="1112" height="926" alt="Screenshot 2026-02-02 at 12 57 40 PM" src="https://github.com/user-attachments/assets/49e1bc09-fca4-444e-ad81-cc261ccb63cf" />
+<img width="1112" height="926" alt="Screenshot 2026-02-02 at 12 57 40 PM" src="https://github.com/user-attachments/assets/49e1bc09-fca4-444e-ad81-cc261ccb63cf" />
 
 
 **CodeRabbit-style AI code reviews in your IDE, powered by Claude CLI.**
@@ -22,21 +22,18 @@ Transform Claude's code review output into native VS Code/Cursor comment threads
 curl -fsSL https://raw.githubusercontent.com/bmp4070/claude-review-lens/main/install.sh | bash
 ```
 
-Or clone and run:
-
-```bash
-git clone https://github.com/bmp4070/claude-review-lens.git
-cd claude-review-lens
-./install.sh
-```
+This installs:
+- VS Code extension from [Marketplace](https://marketplace.visualstudio.com/items?itemName=code-authx.claude-review-lens)
+- Claude stop hook for auto-launch
+- `/pr-review` skill for PR reviews
 
 ## What Gets Installed
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | VS Code Extension | Cursor/VS Code | Renders comment threads |
-| Stop Hook | `~/.claude/hooks/` | Launches IDE after review |
-| `/review` Skill | `~/.claude/settings.json` | Slash command for reviews |
+| Stop Hook | `~/.claude/hooks/sync_and_launch.sh` | Checkouts branch & launches IDE |
+| `/pr-review` Skill | `~/.claude/skills/pr-review/SKILL.md` | Slash command for PR reviews |
 | CLAUDE.md | `~/.claude/CLAUDE.md` | Instructs Claude on output format |
 
 ## Usage
@@ -46,28 +43,28 @@ cd claude-review-lens
 cd your-project
 claude
 
-# Run a review
-> /review                    # Review all changes
-> /review PR 629           # Review specific PR
-> review the authentication module
+# Review a PR
+> /pr-review 123                    # Review PR #123
+> /pr-review https://github.com/org/repo/pull/123
 
 # Exit Claude
 > exit
 ```
 
-**On exit:** Your IDE opens with review comments displayed as native threads.
+**On exit:** The hook checks out the PR branch and opens your IDE with review comments.
+
+**⚠️ IMPORTANT:** Restart Claude CLI after installation for `/pr-review` to appear.
 
 ## Manual Extension Install
 
-If the installer can't detect your editor:
-
 ```bash
-# Cursor
-cursor --install-extension claude-review-lens-0.2.0.vsix
-
-# VS Code
-code --install-extension claude-review-lens-0.2.0.vsix
+# From Marketplace (recommended)
+cursor --install-extension code-authx.claude-review-lens
+# or
+code --install-extension code-authx.claude-review-lens
 ```
+
+Or install from [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=code-authx.claude-review-lens).
 
 ## Review JSON Schema
 

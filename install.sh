@@ -3,10 +3,10 @@
 # Claude Review Lens - One-Line Installer
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/YOUR_ORG/claude-review-lens/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/bmp4070/claude-review-lens/main/install.sh | bash
 #
 # Or clone and run:
-#   git clone https://github.com/YOUR_ORG/claude-review-lens.git
+#   git clone https://github.com/bmp4070/claude-review-lens.git
 #   cd claude-review-lens && ./install.sh
 #
 
@@ -20,6 +20,7 @@ REPO_URL="https://github.com/bmp4070/claude-review-lens"
 VSIX_URL="https://github.com/bmp4070/claude-review-lens/releases/latest/download/claude-review-lens.vsix"
 CLAUDE_DIR="$HOME/.claude"
 HOOKS_DIR="$CLAUDE_DIR/hooks"
+SKILLS_DIR="$CLAUDE_DIR/skills"
 SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 
 # =============================================================================
@@ -61,28 +62,64 @@ detect_editor() {
 # Installation Steps
 # =============================================================================
 
+build_extension() {
+    local project_dir="$1"
+    step "Building extension from source..."
+
+    if ! command -v npm &>/dev/null; then
+        warn "npm not found, cannot build extension"
+        return 1
+    fi
+
+    (
+        cd "$project_dir"
+        npm install --silent 2>/dev/null
+        npm run compile --silent 2>/dev/null
+        npm run package --silent 2>/dev/null
+    ) || {
+        warn "Build failed"
+        return 1
+    }
+
+    info "Extension built successfully"
+}
+
 install_extension() {
     local editor="$1"
     step "Installing VS Code extension..."
 
-    # Check if running from cloned repo
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+    # Look for existing VSIX
     local vsix_path=""
-    if [[ -f "./claude-review-lens-0.2.0.vsix" ]]; then
-        vsix_path="./claude-review-lens-0.2.0.vsix"
-    elif [[ -f "./claude-review-lens.vsix" ]]; then
-        vsix_path="./claude-review-lens.vsix"
-    else
-        # Download from releases
-        vsix_path="/tmp/claude-review-lens.vsix"
-        curl -fsSL "$VSIX_URL" -o "$vsix_path" 2>/dev/null || {
-            warn "Could not download VSIX. Install manually from $REPO_URL"
-            return 0
-        }
+    vsix_path=$(find "$script_dir" -maxdepth 1 -name "claude-review-lens-*.vsix" -type f 2>/dev/null | head -1)
+
+    # If no VSIX found, try to build it
+    if [[ -z "$vsix_path" ]] && [[ -f "$script_dir/package.json" ]]; then
+        if build_extension "$script_dir"; then
+            vsix_path=$(find "$script_dir" -maxdepth 1 -name "claude-review-lens-*.vsix" -type f 2>/dev/null | head -1)
+        fi
     fi
 
-    "$editor" --install-extension "$vsix_path" --force &>/dev/null && \
-        info "Extension installed in $editor" || \
-        warn "Extension install failed. Install manually."
+    # If still no VSIX, try downloading from releases
+    if [[ -z "$vsix_path" ]]; then
+        step "Downloading extension from GitHub releases..."
+        vsix_path="/tmp/claude-review-lens.vsix"
+        if curl -fsSL "$VSIX_URL" -o "$vsix_path" 2>/dev/null; then
+            info "Downloaded extension"
+        else
+            warn "Could not download VSIX. Install manually from $REPO_URL/releases"
+            return 0
+        fi
+    fi
+
+    # Install the extension
+    if "$editor" --install-extension "$vsix_path" --force &>/dev/null; then
+        info "Extension installed in $editor"
+    else
+        warn "Extension install failed. Try manually: $editor --install-extension $vsix_path"
+    fi
 }
 
 install_hook() {
@@ -95,6 +132,8 @@ install_hook() {
 set -euo pipefail
 
 REVIEW_FILE=".claude-review.json"
+
+log_info() { echo "[claude-hook] $*" >&2; }
 
 find_editor() {
     local paths=("cursor" "code" "/Applications/Cursor.app/Contents/Resources/app/bin/cursor"
@@ -109,9 +148,31 @@ get_first_target() {
     local file="${1}/${REVIEW_FILE}"
     [[ -f "$file" ]] || return 1
     local f l
-    f=$(jq -r '.[0].file // empty' "$file" 2>/dev/null)
-    l=$(jq -r '.[0].line // 1' "$file" 2>/dev/null)
+    # Support both array and object formats
+    f=$(jq -r 'if type == "array" then .[0].file else .comments[0].file end // empty' "$file" 2>/dev/null)
+    l=$(jq -r 'if type == "array" then .[0].line else .comments[0].line end // 1' "$file" 2>/dev/null)
     [[ -n "$f" ]] && echo "${1}/${f}:${l}"
+}
+
+get_branch() {
+    local file="${1}/${REVIEW_FILE}"
+    [[ -f "$file" ]] || return 1
+    jq -r '.branch // empty' "$file" 2>/dev/null
+}
+
+checkout_branch() {
+    local project_dir="$1" branch="$2"
+    [[ -z "$branch" ]] && return 0
+    git -C "$project_dir" rev-parse --git-dir &>/dev/null || return 0
+
+    local current=$(git -C "$project_dir" branch --show-current 2>/dev/null || echo "")
+    [[ "$current" == "$branch" ]] && return 0
+
+    log_info "Checking out branch: $branch"
+    git -C "$project_dir" fetch origin "$branch" 2>/dev/null || true
+    git -C "$project_dir" checkout "$branch" 2>/dev/null || \
+        git -C "$project_dir" checkout -b "$branch" "origin/$branch" 2>/dev/null || \
+        log_info "Could not checkout $branch"
 }
 
 main() {
@@ -119,10 +180,15 @@ main() {
     [[ -f "${project_dir}/${REVIEW_FILE}" ]] || exit 0
 
     local editor
-    editor=$(find_editor) || { echo "[hook] Editor not found" >&2; exit 1; }
+    editor=$(find_editor) || { log_info "Editor not found"; exit 1; }
 
-    echo "[claude-hook] Review detected, launching $editor..." >&2
+    log_info "Review detected, launching $editor..."
 
+    # Checkout PR branch if specified
+    local branch=$(get_branch "$project_dir" || echo "")
+    [[ -n "$branch" ]] && checkout_branch "$project_dir" "$branch"
+
+    # Launch editor
     local goto=$(get_first_target "$project_dir" || echo "")
     if [[ -n "$goto" ]]; then
         "$editor" "$project_dir" --goto "$goto" &>/dev/null &
@@ -185,39 +251,67 @@ EOF
 }
 
 install_skill() {
-    step "Installing /review skill..."
+    step "Installing /pr-review skill..."
 
-    # Add skill to settings
-    local skill_config
-    skill_config=$(cat << 'EOF'
+    local skill_dir="$SKILLS_DIR/pr-review"
+    mkdir -p "$skill_dir"
+
+    cat > "$skill_dir/SKILL.md" << 'SKILL_EOF'
+---
+name: pr-review
+description: Review a GitHub PR and output findings to .claude-review.json for IDE visualization
+---
+
+# PR Review Skill
+
+Review a GitHub Pull Request and generate structured review comments.
+
+## Instructions
+
+1. **Get PR details**: `gh pr view <number> --json headRefName,title,body,files`
+2. **Checkout PR branch**: `gh pr checkout <number>`
+3. **Analyze changes**: `gh pr diff <number>`
+4. **Write findings** to `.claude-review.json`:
+
+```json
 {
-  "skills": {
-    "review": {
-      "description": "Review code and output findings to .claude-review.json",
-      "prompt": "Review the code thoroughly and write your findings to `.claude-review.json` in the workspace root.\n\nUse this JSON schema:\n```json\n[\n  {\n    \"file\": \"relative/path.ts\",\n    \"line\": 42,\n    \"message\": \"### Title\\n\\n**Problem:** ...\\n\\n**Suggestion:**\\n```code```\",\n    \"author\": \"Claude\",\n    \"mode\": \"suggestion\",\n    \"severity\": \"warning\"\n  }\n]\n```\n\nSeverity levels:\n- error: Security issues, bugs, crashes\n- warning: Performance, code smells\n- info: Style, best practices\n\nAnalyze: ${input:-all staged/modified files}"
+  "branch": "<branch-name>",
+  "pr": <number>,
+  "comments": [
+    {
+      "file": "path/to/file.ts",
+      "line": 42,
+      "message": "### Title\n\n**Problem:** ...\n\n**Suggestion:**\n```code```",
+      "author": "Claude",
+      "mode": "suggestion",
+      "severity": "error"
     }
-  }
+  ]
 }
-EOF
-)
+```
 
-    if [[ -f "$SETTINGS_FILE" ]]; then
-        if ! jq -e '.skills.review' "$SETTINGS_FILE" &>/dev/null; then
-            jq --argjson skills "$(echo "$skill_config" | jq '.skills')" \
-                '.skills = (.skills // {}) + $skills' "$SETTINGS_FILE" > "${SETTINGS_FILE}.tmp"
-            mv "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
-            info "Added /review skill"
-        else
-            info "Skill already configured"
-        fi
-    fi
+## Severity
+- **error**: Security, bugs, crashes, breaking changes
+- **warning**: Performance, code smells, deprecations
+- **info**: Style, best practices
+
+## Usage
+```
+/pr-review 123
+/pr-review https://github.com/org/repo/pull/123
+```
+
+After writing the file, summarize findings. The IDE will display comments when you exit.
+SKILL_EOF
+
+    info "Skill installed: $skill_dir/SKILL.md"
 }
 
 install_claude_md() {
     step "Installing CLAUDE.md instructions..."
 
     local claude_md="$CLAUDE_DIR/CLAUDE.md"
-    local marker="# Claude Review Lens Integration"
+    local marker="# Claude Review Lens"
 
     if [[ -f "$claude_md" ]] && grep -q "$marker" "$claude_md"; then
         info "CLAUDE.md already configured"
@@ -226,27 +320,24 @@ install_claude_md() {
 
     cat >> "$claude_md" << 'CLAUDE_EOF'
 
-# Claude Review Lens Integration
+# Claude Review Lens
 
-When performing code reviews, output findings to `.claude-review.json`:
+When reviewing PRs, output to `.claude-review.json`:
 
 ```json
-[
-  {
-    "file": "path/to/file.ts",
-    "line": 42,
-    "message": "### Title\n\n**Problem:** Description\n\n**Suggestion:**\n```typescript\n// fix\n```",
-    "author": "Claude",
-    "mode": "suggestion",
-    "severity": "warning"
-  }
-]
+{
+  "branch": "feature-branch",
+  "pr": 123,
+  "comments": [
+    {"file": "path.ts", "line": 42, "message": "...", "severity": "error"}
+  ]
+}
 ```
 
-Severity: error (bugs/security), warning (code smells), info (suggestions)
+Use `/pr-review <number>` to review a PR.
 CLAUDE_EOF
 
-    info "Added review instructions to CLAUDE.md"
+    info "Added instructions to CLAUDE.md"
 }
 
 # =============================================================================
@@ -281,11 +372,12 @@ main() {
     echo "  Usage:"
     echo "    cd your-project"
     echo "    claude"
-    echo "    > /review           # Review all changes"
-    echo "    > /review src/      # Review specific path"
+    echo "    > /pr-review 123      # Review PR #123"
     echo "    > exit"
     echo ""
     echo "  On exit, your editor opens with review comments."
+    echo ""
+    echo -e "  ${YELLOW}⚠ IMPORTANT: Restart Claude CLI for /pr-review to appear${NC}"
     echo ""
 }
 
