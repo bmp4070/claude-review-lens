@@ -14,11 +14,7 @@ export function processUserData(data: unknown): string {
 }
 
 export function calculateTotal(items: number[]): number {
-  let total = 0;
-  for (let i = 0; i < items.length; i++) {
-    total += items[i];
-  }
-  return total;
+  return items.reduce((sum, n) => sum + n, 0);
 }
 
 export class UserService {

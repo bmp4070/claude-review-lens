@@ -1,8 +1,13 @@
 {
   "name": "claude-review-lens",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anthropics/claude-review-code"
+  },
   "displayName": "Claude Review Lens",
   "description": "Visualize AI code review comments as native VS Code comment threads - like CodeRabbit for local development",
-  "version": "0.2.1",
+  "version": "0.5.0",
   "publisher": "code-authx",
   "icon": "assets/icon.png",
   "engines": {
@@ -60,8 +65,49 @@
         "title": "Toggle Comment at Line",
         "category": "Claude Review",
         "icon": "$(comment)"
+      },
+      {
+        "command": "claude-review.applySuggestion",
+        "title": "Apply Suggestion",
+        "category": "Claude Review",
+        "icon": "$(play)"
+      },
+      {
+        "command": "claude-review.copySuggestion",
+        "title": "Copy Suggestion",
+        "category": "Claude Review",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "claude-review.reply",
+        "title": "Reply to Claude",
+        "category": "Claude Review",
+        "icon": "$(comment)"
+      },
+      {
+        "command": "claude-review.checkCliStatus",
+        "title": "Check Claude CLI Status",
+        "category": "Claude Review",
+        "icon": "$(debug-console)"
       }
     ],
+    "configuration": {
+      "title": "Claude Review",
+      "properties": {
+        "claudeReview.claudeCliPath": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to Claude CLI executable (leave empty to auto-detect)"
+        },
+        "claudeReview.replyTimeout": {
+          "type": "number",
+          "default": 60,
+          "minimum": 10,
+          "maximum": 300,
+          "description": "Timeout in seconds for Claude CLI responses"
+        }
+      }
+    },
     "keybindings": [
       {
         "command": "claude-review.toggleAtLine",
@@ -74,14 +120,26 @@
       "comments/commentThread/title": [
         {
           "command": "claude-review.resolve",
-          "when": "commentController == claude-review && commentThread =~ /claude-review-thread/",
-          "group": "inline@1"
+          "when": "commentController == claude-review",
+          "group": "inline"
         }
       ],
       "comments/commentThread/context": [
         {
+          "command": "claude-review.reply",
+          "when": "commentController == claude-review",
+          "group": "inline@1"
+        },
+        {
           "command": "claude-review.resolve",
           "when": "commentController == claude-review",
+          "group": "inline@2"
+        }
+      ],
+      "comments/comment/context": [
+        {
+          "command": "claude-review.applySuggestion",
+          "when": "commentController == claude-review && comment == suggestion",
           "group": "inline"
         }
       ],

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import { spawn, execSync } from 'child_process';
 
 // =============================================================================
 // Types
@@ -9,13 +10,81 @@ import * as fs from 'fs';
 interface ReviewComment {
   file: string;
   line: number;
+  endLine?: number; // End line for multi-line replacements (1-based, inclusive)
   message: string;
   author?: string;
   mode?: 'comment' | 'suggestion';
-  severity?: 'info' | 'warning' | 'error';
+  severity?: 'critical' | 'medium' | 'nit'; // Review severity: critical (must fix), medium (should fix), nit (nice to have)
+  suggestedCode?: string; // Explicit code to apply for suggestions
+  confidence?: number; // Confidence score 0-100 (from code-reviewer agent)
+  agent?: string; // Which pr-review-toolkit agent generated this (e.g., 'code-reviewer', 'silent-failure-hunter')
+  category?: string; // Issue category (e.g., 'error-handling', 'type-design', 'test-coverage')
+  ratings?: Record<string, number>; // Quantitative ratings (e.g., from type-design-analyzer)
   metadata?: {
     branch?: string;
   };
+}
+
+// =============================================================================
+// Claude CLI Detection
+// =============================================================================
+
+class ClaudeCliDetector {
+  private static cachedPath: string | null | undefined = undefined;
+
+  static async detect(): Promise<string | null> {
+    if (this.cachedPath !== undefined) {
+      return this.cachedPath;
+    }
+
+    const paths = [
+      // Common global paths
+      '/usr/local/bin/claude',
+      '/opt/homebrew/bin/claude',
+      // User local
+      `${process.env.HOME}/.local/bin/claude`,
+      `${process.env.HOME}/.npm-global/bin/claude`,
+      // NVM paths
+      `${process.env.HOME}/.nvm/versions/node/*/bin/claude`,
+    ];
+
+    // Check specific paths first
+    for (const p of paths) {
+      if (!p.includes('*') && this.isExecutable(p)) {
+        this.cachedPath = p;
+        return p;
+      }
+    }
+
+    // Try 'which claude' or 'where claude'
+    try {
+      const cmd = process.platform === 'win32' ? 'where claude' : 'which claude';
+      const result = execSync(cmd, { encoding: 'utf-8', timeout: 5000 }).trim();
+      const foundPath = result.split('\n')[0];
+      if (foundPath && this.isExecutable(foundPath)) {
+        this.cachedPath = foundPath;
+        return foundPath;
+      }
+    } catch {
+      // Not found in PATH
+    }
+
+    this.cachedPath = null;
+    return null;
+  }
+
+  private static isExecutable(filePath: string): boolean {
+    try {
+      fs.accessSync(filePath, fs.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  static clearCache(): void {
+    this.cachedPath = undefined;
+  }
 }
 
 // ReviewFile format: { branch?: string, pr?: number, comments: ReviewComment[] }
@@ -24,6 +93,7 @@ interface ReviewComment {
 interface ClaudeComment extends vscode.Comment {
   id: string;
   parent?: ClaudeCommentThread;
+  reviewData?: ReviewComment; // Store original review for apply action
 }
 
 interface ClaudeCommentThread extends vscode.CommentThread {
@@ -45,6 +115,7 @@ const CONTROLLER_LABEL = 'Claude Review';
 class ClaudeReviewController {
   private controller: vscode.CommentController;
   private threads: Map<string, ClaudeCommentThread> = new Map();
+  private comments: Map<string, ClaudeComment> = new Map(); // Track comments for apply action
   private disposables: vscode.Disposable[] = [];
   private watcher: vscode.FileSystemWatcher | undefined;
   private commentId = 0;
@@ -79,6 +150,21 @@ class ClaudeReviewController {
 
     // Configure comment controller options
     this.controller.commentingRangeProvider = undefined; // Read-only, no new comments
+
+    // Register reply handler for Claude CLI interaction
+    this.controller.reactionHandler = undefined; // No reactions
+
+    // Note: VS Code calls this command when user submits a reply in the comment thread
+    // The argument is a CommentReply object with {thread, text}
+    this.disposables.push(
+      vscode.commands.registerCommand('claude-review.reply', async (reply: vscode.CommentReply) => {
+        if (!reply || !reply.text) {
+          vscode.window.showWarningMessage('Claude Review: Please enter a reply');
+          return;
+        }
+        await this.handleReply(reply);
+      })
+    );
 
     // Register commands
     this.registerCommands();
@@ -139,7 +225,23 @@ class ClaudeReviewController {
       }
     );
 
-    this.disposables.push(resolveCmd, resolveAllCmd, refreshCmd, openPanelCmd, expandAllCmd, toggleCmd);
+    // Apply suggestion
+    const applySuggestionCmd = vscode.commands.registerCommand(
+      'claude-review.applySuggestion',
+      (commentId: string) => {
+        this.applySuggestion(commentId);
+      }
+    );
+
+    // Copy suggestion to clipboard
+    const copySuggestionCmd = vscode.commands.registerCommand(
+      'claude-review.copySuggestion',
+      (commentId: string) => {
+        this.copySuggestion(commentId);
+      }
+    );
+
+    this.disposables.push(resolveCmd, resolveAllCmd, refreshCmd, openPanelCmd, expandAllCmd, toggleCmd, applySuggestionCmd, copySuggestionCmd);
 
     // Auto-expand when cursor moves to a line with a comment
     vscode.window.onDidChangeTextEditorSelection(
@@ -212,7 +314,7 @@ class ClaudeReviewController {
     return path.join(this.workspaceRoot, REVIEW_FILE);
   }
 
-  private loadReviewComments(): void {
+  private async loadReviewComments(): Promise<void> {
     try {
       if (!fs.existsSync(this.reviewFilePath)) {
         this.clearAllThreads();
@@ -239,17 +341,21 @@ class ClaudeReviewController {
       // Group comments by file and line for threading
       const grouped = this.groupComments(comments);
 
-      // Create threads
-      for (const groupedComments of grouped.values()) {
-        this.createThread(groupedComments);
-      }
+      // Create threads (async to check CLI availability)
+      const threadPromises = Array.from(grouped.values()).map((groupedComments) =>
+        this.createThread(groupedComments)
+      );
+      await Promise.all(threadPromises);
 
-      // Show notification
+      // Show notification with CLI status
       const count = comments.length;
       if (count > 0) {
+        const claudePath = await ClaudeCliDetector.detect();
+        const replyStatus = claudePath ? ' (replies enabled)' : '';
+
         vscode.window
           .showInformationMessage(
-            `Claude Review: ${count} comment${count > 1 ? 's' : ''} loaded`,
+            `Claude Review: ${count} comment${count > 1 ? 's' : ''} loaded${replyStatus}`,
             'Open Comments Panel'
           )
           .then((selection) => {
@@ -280,7 +386,7 @@ class ClaudeReviewController {
     return grouped;
   }
 
-  private createThread(comments: ReviewComment[]): void {
+  private async createThread(comments: ReviewComment[]): Promise<void> {
     if (comments.length === 0) {
       return;
     }
@@ -308,6 +414,7 @@ class ClaudeReviewController {
     thread.id = threadId;
 
     // Configure thread appearance
+    // Note: Reply functionality disabled for now - Claude CLI integration needs refinement
     thread.canReply = false;
     thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
     thread.label = this.getThreadLabel(comments);
@@ -326,7 +433,7 @@ class ClaudeReviewController {
     const id = `comment-${++this.commentId}`;
 
     // Build the comment body with markdown
-    const body = this.buildCommentBody(review);
+    const body = this.buildCommentBody(review, id);
 
     const comment: ClaudeComment = {
       id,
@@ -335,12 +442,16 @@ class ClaudeReviewController {
       mode: vscode.CommentMode.Preview,
       parent: thread,
       contextValue: review.mode === 'suggestion' ? 'suggestion' : 'comment',
+      reviewData: review, // Store for apply action
     };
+
+    // Track comment for apply action
+    this.comments.set(id, comment);
 
     return comment;
   }
 
-  private buildCommentBody(review: ReviewComment): vscode.MarkdownString {
+  private buildCommentBody(review: ReviewComment, commentId: string): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
     md.isTrusted = true;
     md.supportHtml = true;
@@ -349,22 +460,154 @@ class ClaudeReviewController {
     // Add severity badge if present
     if (review.severity) {
       const badges: Record<string, string> = {
-        info: '$(info) **Info**',
-        warning: '$(warning) **Warning**',
-        error: '$(error) **Error**',
+        critical: '$(flame) **Critical**',
+        medium: '$(warning) **Medium**',
+        nit: '$(info) **Nit**',
       };
-      md.appendMarkdown(badges[review.severity] + '\n\n');
+      const badge = badges[review.severity] || badges.nit;
+
+      // Add confidence score if available
+      if (review.confidence !== undefined) {
+        md.appendMarkdown(`${badge} _(${review.confidence}% confidence)_\n\n`);
+      } else {
+        md.appendMarkdown(badge + '\n\n');
+      }
     }
 
-    // Add suggestion label if applicable
-    if (review.mode === 'suggestion') {
-      md.appendMarkdown('$(lightbulb) **Suggestion**\n\n');
+    // Add agent type badge if from pr-review-toolkit
+    if (review.agent) {
+      const agentLabels: Record<string, string> = {
+        'code-reviewer': '$(checklist) Code Review',
+        'silent-failure-hunter': '$(bug) Error Handling',
+        'code-simplifier': '$(wand) Simplification',
+        'comment-analyzer': '$(comment-discussion) Comment Quality',
+        'pr-test-analyzer': '$(beaker) Test Coverage',
+        'type-design-analyzer': '$(symbol-interface) Type Design',
+      };
+      const label = agentLabels[review.agent] || `$(extensions) ${review.agent}`;
+      md.appendMarkdown(`${label}\n\n`);
     }
 
     // Add the main message (already supports markdown)
-    md.appendMarkdown(review.message);
+    // If suggestedCode is present, strip out redundant "Suggestion/Suggested Fix" code blocks from message
+    let message = review.message;
+    if (review.suggestedCode) {
+      // Remove "**Suggestion:**" or "**Suggested Fix:**" sections with their code blocks
+      message = message.replace(/\*\*Suggest(?:ion|ed Fix):\*\*\s*\n*```[\s\S]*?```/gi, '');
+      // Clean up any trailing whitespace or multiple newlines
+      message = message.replace(/\n{3,}/g, '\n\n').trim();
+    }
+    md.appendMarkdown(message);
+
+    // Add ratings if available (from type-design-analyzer)
+    if (review.ratings && Object.keys(review.ratings).length > 0) {
+      md.appendMarkdown('\n\n---\n**Ratings:**\n');
+      for (const [key, value] of Object.entries(review.ratings)) {
+        const stars = '★'.repeat(Math.round(value)) + '☆'.repeat(10 - Math.round(value));
+        md.appendMarkdown(`- ${key}: ${stars} (${value}/10)\n`);
+      }
+    }
+
+    // Add suggested code block with diff-like styling
+    if (review.mode === 'suggestion' && review.suggestedCode) {
+      const args = encodeURIComponent(JSON.stringify(commentId));
+
+      // Detect language from file extension
+      const ext = review.file.split('.').pop() || '';
+      const langMap: Record<string, string> = {
+        ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
+        py: 'python', java: 'java', go: 'go', rs: 'rust', rb: 'ruby',
+        cpp: 'cpp', c: 'c', cs: 'csharp', php: 'php', swift: 'swift',
+      };
+      const lang = langMap[ext] || ext;
+
+      // Add styled suggested code section
+      md.appendMarkdown('\n\n---\n');
+      md.appendMarkdown(`$(diff-added) **Suggested Change** _(Lines ${review.line}${review.endLine ? `-${review.endLine}` : ''})_ ‎ ‎ [$(copy)](command:claude-review.copySuggestion?${args} "Copy to clipboard")\n\n`);
+
+      // Code block with syntax highlighting and green diff prefix
+      const codeLines = review.suggestedCode.split('\n');
+      const diffCode = codeLines.map(line => `+ ${line}`).join('\n');
+      md.appendMarkdown(`\`\`\`diff\n${diffCode}\n\`\`\`\n\n`);
+
+      // Action button
+      md.appendMarkdown(`[$(play) **Apply Change**](command:claude-review.applySuggestion?${args})`);
+    }
 
     return md;
+  }
+
+  private async applySuggestion(commentId: string): Promise<void> {
+    const comment = this.comments.get(commentId);
+    if (!comment || !comment.reviewData) {
+      vscode.window.showErrorMessage('Claude Review: Could not find suggestion to apply');
+      return;
+    }
+
+    const review = comment.reviewData;
+    if (!review.suggestedCode) {
+      vscode.window.showErrorMessage('Claude Review: No suggested code available');
+      return;
+    }
+
+    // Build file path
+    const filePath = path.isAbsolute(review.file)
+      ? review.file
+      : path.join(this.workspaceRoot, review.file);
+
+    const uri = vscode.Uri.file(filePath);
+
+    try {
+      // Open the document
+      const document = await vscode.workspace.openTextDocument(uri);
+
+      // Calculate range to replace
+      const startLine = Math.max(0, review.line - 1); // Convert to 0-based
+      const endLine = review.endLine ? review.endLine - 1 : startLine; // Use endLine if provided
+
+      const startPos = new vscode.Position(startLine, 0);
+      const endPos = new vscode.Position(endLine, document.lineAt(endLine).text.length);
+      const range = new vscode.Range(startPos, endPos);
+
+      // Create workspace edit
+      const edit = new vscode.WorkspaceEdit();
+      edit.replace(uri, range, review.suggestedCode);
+
+      // Apply the edit
+      const success = await vscode.workspace.applyEdit(edit);
+
+      if (success) {
+        vscode.window.showInformationMessage('Claude Review: Suggestion applied');
+
+        // Optionally resolve the thread
+        if (comment.parent) {
+          this.resolveThread(comment.parent);
+        }
+      } else {
+        vscode.window.showErrorMessage('Claude Review: Failed to apply suggestion');
+      }
+    } catch (error) {
+      vscode.window.showErrorMessage(
+        `Claude Review: Error applying suggestion - ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private async copySuggestion(commentId: string): Promise<void> {
+    const comment = this.comments.get(commentId);
+    if (!comment || !comment.reviewData) {
+      vscode.window.showErrorMessage('Claude Review: Could not find suggestion to copy');
+      return;
+    }
+
+    const review = comment.reviewData;
+    if (!review.suggestedCode) {
+      vscode.window.showErrorMessage('Claude Review: No suggested code available');
+      return;
+    }
+
+    await vscode.env.clipboard.writeText(review.suggestedCode);
+    vscode.window.showInformationMessage('Claude Review: Suggested code copied to clipboard');
   }
 
   private getAuthor(review: ReviewComment): vscode.CommentAuthorInformation {
@@ -382,12 +625,207 @@ class ClaudeReviewController {
     return 'Claude Review';
   }
 
+  // =============================================================================
+  // Claude CLI Reply Handling
+  // =============================================================================
+
+  private async handleReply(reply: vscode.CommentReply): Promise<void> {
+    const thread = reply.thread as ClaudeCommentThread;
+    const userText = reply.text.trim();
+
+    if (!userText) {
+      return;
+    }
+
+    // Get the first comment to find original review data
+    const firstComment = thread.comments[0] as ClaudeComment;
+    const originalReview = firstComment?.reviewData;
+
+    // Create loading comment
+    const loadingComment = this.createLoadingComment();
+    thread.comments = [...thread.comments, loadingComment];
+
+    try {
+      // Get file context around the relevant line
+      const fileContext = await this.getFileContext(thread.uri.fsPath, originalReview?.line || 1, 10);
+
+      // Build the prompt
+      const prompt = this.buildClaudePrompt(originalReview, userText, fileContext);
+
+      // Invoke Claude CLI
+      const response = await this.invokeClaudeCli(prompt);
+
+      // Remove loading comment
+      thread.comments = thread.comments.filter((c) => c !== loadingComment);
+
+      // Add user's message
+      const userComment = this.createUserComment(userText);
+      thread.comments = [...thread.comments, userComment];
+
+      // Add Claude's response
+      if (response.success && response.output) {
+        const claudeResponse = this.createClaudeResponseComment(response.output);
+        thread.comments = [...thread.comments, claudeResponse];
+      } else {
+        vscode.window.showErrorMessage(
+          `Claude response failed: ${response.error || 'Unknown error'}`
+        );
+      }
+    } catch (error) {
+      // Remove loading comment on error
+      thread.comments = thread.comments.filter((c) => c !== loadingComment);
+
+      vscode.window.showErrorMessage(
+        `Failed to get Claude response: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  private createLoadingComment(): ClaudeComment {
+    const md = new vscode.MarkdownString('$(loading~spin) _Waiting for Claude..._');
+    md.isTrusted = true;
+
+    return {
+      id: `loading-${Date.now()}`,
+      body: md,
+      author: this.claudeAuthor,
+      mode: vscode.CommentMode.Preview,
+    };
+  }
+
+  private createUserComment(text: string): ClaudeComment {
+    const md = new vscode.MarkdownString(text);
+    md.isTrusted = true;
+
+    return {
+      id: `user-${Date.now()}`,
+      body: md,
+      author: { name: 'You' },
+      mode: vscode.CommentMode.Preview,
+    };
+  }
+
+  private createClaudeResponseComment(response: string): ClaudeComment {
+    const md = new vscode.MarkdownString(response);
+    md.isTrusted = true;
+    md.supportHtml = true;
+    md.supportThemeIcons = true;
+
+    return {
+      id: `response-${Date.now()}`,
+      body: md,
+      author: this.claudeAuthor,
+      mode: vscode.CommentMode.Preview,
+    };
+  }
+
+  private async getFileContext(filePath: string, line: number, contextLines: number): Promise<string> {
+    try {
+      const document = await vscode.workspace.openTextDocument(filePath);
+      const startLine = Math.max(0, line - contextLines - 1);
+      const endLine = Math.min(document.lineCount - 1, line + contextLines - 1);
+
+      const lines: string[] = [];
+      for (let i = startLine; i <= endLine; i++) {
+        const lineText = document.lineAt(i).text;
+        const marker = i === line - 1 ? '>>>' : '   ';
+        lines.push(`${marker} ${i + 1}: ${lineText}`);
+      }
+      return lines.join('\n');
+    } catch {
+      return '[Could not read file context]';
+    }
+  }
+
+  private buildClaudePrompt(review: ReviewComment | undefined, userQuestion: string, fileContext: string): string {
+    const parts: string[] = [];
+
+    parts.push('You are responding to a follow-up question about a code review comment.');
+    parts.push('');
+
+    if (review) {
+      parts.push('ORIGINAL REVIEW COMMENT:');
+      parts.push(`File: ${review.file}, Line: ${review.line}`);
+      if (review.severity) {
+        parts.push(`Severity: ${review.severity}`);
+      }
+      parts.push(review.message);
+      parts.push('');
+    }
+
+    parts.push('FILE CONTEXT (around the relevant line):');
+    parts.push(fileContext);
+    parts.push('');
+
+    parts.push("USER'S QUESTION:");
+    parts.push(userQuestion);
+    parts.push('');
+
+    parts.push("Provide a helpful, concise response addressing the user's question about this code review comment.");
+    parts.push('Format your response in markdown.');
+
+    return parts.join('\n');
+  }
+
+  private async invokeClaudeCli(prompt: string): Promise<{ success: boolean; output?: string; error?: string }> {
+    const claudePath = await ClaudeCliDetector.detect();
+    if (!claudePath) {
+      return { success: false, error: 'Claude CLI not found' };
+    }
+
+    return new Promise((resolve) => {
+      const child = spawn(claudePath, ['--print', prompt], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        cwd: this.workspaceRoot,
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      child.stdout?.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      child.stderr?.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve({ success: true, output: stdout.trim() });
+        } else {
+          resolve({ success: false, error: stderr.trim() || `Exit code: ${code}` });
+        }
+      });
+
+      child.on('error', (err) => {
+        resolve({ success: false, error: err.message });
+      });
+
+      // Timeout after 60 seconds
+      setTimeout(() => {
+        child.kill();
+        resolve({ success: false, error: 'Request timed out after 60 seconds' });
+      }, 60000);
+    });
+  }
+
   // Note: Reactions require iconPath which complicates things
   // Severity is shown via badges in the comment body instead
 
-  private resolveThread(thread: ClaudeCommentThread): void {
+  private resolveThread(thread: ClaudeCommentThread | vscode.CommentThread): void {
+    if (!thread) {
+      vscode.window.showErrorMessage('Claude Review: No thread to resolve');
+      return;
+    }
+
+    // Get the thread ID - either from our custom property or generate from URI/range
+    const customThread = thread as ClaudeCommentThread;
+    const threadId = customThread.id ||
+      `${vscode.workspace.asRelativePath(thread.uri)}:${(thread.range?.start.line ?? 0) + 1}`;
+
     thread.dispose();
-    this.threads.delete(thread.id);
+    this.threads.delete(threadId);
     this.updateReviewFile();
   }
 
@@ -404,6 +842,7 @@ class ClaudeReviewController {
       thread.dispose();
     }
     this.threads.clear();
+    this.comments.clear(); // Clear comment tracking
   }
 
   private updateReviewFile(): void {
